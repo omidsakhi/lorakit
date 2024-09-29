@@ -861,6 +861,8 @@ class TrainJob(BaseJob):
         global_step = 0
         first_epoch = 1
         ema_loss = None
+        last_saved_step = -1
+        last_sampled_step = -1
 
         # Potentially load in the weights and states from a previous save
         if self._resume_from_checkpoint:
@@ -900,7 +902,7 @@ class TrainJob(BaseJob):
             # Only show the progress bar once on each machine.
             disable=not accelerator.is_local_main_process,
         )
-
+        
         for epoch in range(first_epoch, self.num_train_epochs):
             self.set_to_train(accelerator, text_encoder_1, text_encoder_2, unet, optimizer)
 
@@ -1124,7 +1126,8 @@ class TrainJob(BaseJob):
                 accelerator.log(logs, step=global_step)
 
                 if accelerator.is_main_process :
-                    if self._save_every > 0 and global_step > 0 and global_step % self._save_every == 0:
+                    if last_saved_step < global_step and self._save_every > 0 and global_step > 0 and global_step % self._save_every == 0:
+                        last_saved_step = global_step
                         if self._checkpoints_total_limit is not None:
                             checkpoints = os.listdir(self._experiment_folder)
                             checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
@@ -1148,7 +1151,8 @@ class TrainJob(BaseJob):
                         accelerator.save_state(save_path)
                         print(f"Saved state to {save_path}")
 
-                    if not self._disable_sampling and self._sample_config is not None and global_step % self._sample_every == 0:                           
+                    if last_sampled_step < global_step and global_step > 0 and not self._disable_sampling and self._sample_config is not None and global_step % self._sample_every == 0:                           
+                        last_sampled_step = global_step
                         self._generate_samples(accelerator, global_step, vae, unet, text_encoder_1, text_encoder_2)
 
                 if global_step >= self._max_train_steps:

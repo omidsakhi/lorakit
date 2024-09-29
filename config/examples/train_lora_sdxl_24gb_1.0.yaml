@@ -1,0 +1,83 @@
+---
+job: train
+version: "1.0" # increment this when we want to start over
+name: "my_model_name" # this name will be the folder and filename name
+output_folder: "output" # root folder to save training sessions/samples/weights
+config:
+  logging_folder: "logs" # subfolder to save the logs
+  device: "cuda:0" # device to use
+  allow_tf32: true # TensorFloat-32 tensor cores may be used in matrix multiplications on Ampere or newer
+  matmul_precision: "high" #highest, high, medium
+  cudnn_benchmark: true # enable cudnn benchmark
+  instant_prompt: "SKS" # prompt to use for the instant prompt
+  class_prompt: "man" # prompt to use for the class prompt
+  train:
+    dataset_folder: "/path/to/images/folder" # dataset folder containign images
+    #resume_from_checkpoint: ""
+    batch_size: 1 # batch size
+    max_train_steps: 4000 # max training steps
+    save_every: 8 # save every this many epochs
+    checkpoints_total_limit: 8 # total number of checkpoints to keep
+    max_grad_norm: 1.0 # max gradient norm
+    gradient_accumulation_steps: 1 # gradient accumulation steps
+    #with_prior_preservation: true # currently not working (bug)
+    #snr_gamma: 5.0
+    #do_edm_style_training: true
+    seed: 42 # seed
+    dtype: bf16 # data type
+    #gradient_checkpointing: true
+    train_text_encoder: false # train text encoder
+    resolution: 1024 # resolution
+    num_workers: 4 # number of workers
+    loss_decay: 0.995
+    #skip_pre_train_sample: true
+    #disable_sampling: true
+    optimizer: "adamw" # 'adamw', 'adamw8bit' 'adamwschedulefree', 'prodigy'
+    optimizer_params:
+      lr: 0.0001 # learning rate
+      betas: [0.9, 0.999] # betas
+      weight_decay: 0.02 # weight decay
+      eps: 0.00000001 # epsilon
+    lora:
+      rank: 4 # rank
+      use_dora: false # use dora
+      lora_alpha: 4 # lora alpha
+      init_lora_weights: "gaussian" # init lora weights
+      target_modules:
+        - "to_k"
+        - "to_q"
+        - "to_v"
+        - "to_out.0"
+    text_encoder_lora:
+      rank: 4
+      use_dora: false
+      lora_alpha: 4
+      init_lora_weights: "gaussian"
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "out_proj"
+    lr_scheduler: "constant"
+    lr_scheduler_params:
+      num_warmup_steps: 0
+      num_training_steps: 1000
+      num_cycles: 1
+      power: 1
+  model:
+    name_or_path: "D:\\HF_HOME\\hub\\models--stabilityai--stable-diffusion-xl-base-1.0\\snapshots\\462165984030d82259a11f4367a4eed129e94a7b"
+    variant: "fp16"
+  sample:
+    sample_every: 8 # sample every this many epochs
+    prompts:
+      - "first sample positive prompt, sks man"
+      - "second sample positive prompt, sks man"
+      - "third sample positive prompt, sks man"
+    neg:
+      - "first sample negative prompt, painting"
+      - "second sample negative prompt, drawing"
+      - "third sample negative prompt, 3d render"
+    seed: 42
+    walk_seed: true
+    guidance_scale: 7
+    sample_steps: 20

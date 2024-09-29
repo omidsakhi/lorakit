@@ -31,8 +31,15 @@ lorakit is a flexible toolkit for fine-tuning Stable Diffusion XL (SDXL) models 
 To install lorakit, you can use pip:
 
 ```
+pip install lorakit
+```
+
 Alternatively, you can clone the repository and install it locally:
 
+```
+git clone https://github.com/faceharmonyai/lorakit.git
+cd lorakit
+pip install -e .
 ```
 
 ## Usage
@@ -41,6 +48,9 @@ Alternatively, you can clone the repository and install it locally:
 2. Run the training process using the `lorakit` command-line tool:
 
 ```
+lorakit examples/train_lora_sdxl_24gb_1.0.yaml
+```
+
 ## Configuration
 
 lorakit uses YAML configuration files for easy customization of the training process. Find an example configuration file in the `examples` directory.
@@ -60,7 +70,6 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 ## Acknowledgements
 
 This project is based on the DreamBooth branch of AutoTrain Advanced from Hugging Face 🤗. We appreciate their contributions to the open-source community and special thank to Abhishek Thakur for his amazing work on AutoTrain Advanced.
-```
 
 ## Keywords
 

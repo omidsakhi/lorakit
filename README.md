@@ -28,18 +28,12 @@ lorakit is a flexible toolkit for fine-tuning Stable Diffusion XL (SDXL) models 
 
 ## Installation
 
-To install lorakit, you can use pip:
-
 ```
-pip install lorakit
-```
-
-Alternatively, you can clone the repository and install it locally:
-
-```
-git clone https://github.com/faceharmonyai/lorakit.git
+git clone https://github.com/faceharmonyai/lorakit.git lorakit
 cd lorakit
-pip install -e .
+python -m venv .venv
+source .venv/bin/activate # or .venv/Scripts/activate on Windows
+pip install .
 ```
 
 ## Usage

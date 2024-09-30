@@ -25,13 +25,13 @@ config:
     #do_edm_style_training: true
     seed: 42 # seed
     dtype: bf16 # data type
-    #gradient_checkpointing: true
+    gradient_checkpointing: true # We use gradient checkpointing to save memory on Nvidia T4
     train_text_encoder: false # train text encoder
     resolution: 1024 # resolution
     num_workers: 4 # number of workers
     loss_decay: 0.995
     #skip_pre_train_sample: true
-    #disable_sampling: true
+    disable_sampling: true #
     optimizer: "adamw" # 'adamw', 'adamw8bit' 'adamwschedulefree', 'prodigy'
     optimizer_params:
       lr: 0.0001 # learning rate

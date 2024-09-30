@@ -65,7 +65,7 @@ config:
       num_cycles: 1
       power: 1
   model:
-    name_or_path: "D:\\HF_HOME\\hub\\models--stabilityai--stable-diffusion-xl-base-1.0\\snapshots\\462165984030d82259a11f4367a4eed129e94a7b"
+    name_or_path: "stabilityai/stable-diffusion-xl-base-1.0" # huggingface repo name or path to local folder
     variant: "fp16"
   sample:
     sample_every: 8 # sample every this many epochs

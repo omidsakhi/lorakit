@@ -11,6 +11,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# Class nouns used to filter large prompt corpora by subject gender.
+GENDER_CLASS_WORDS: dict[str, tuple[str, ...]] = {
+    "female": ("woman", "girl", "bride"),
+    "male": ("man", "boy", "groom"),
+}
+
 
 @dataclass(frozen=True)
 class Prompt:
@@ -56,11 +62,69 @@ def sample_prompts(prompts: list[Prompt], num: int | None, seed: int = 0) -> lis
     return rng.sample(prompts, num)
 
 
+def normalize_gender(gender: str) -> str:
+    key = gender.strip().lower()
+    if key in {"female", "f", "woman", "women"}:
+        return "female"
+    if key in {"male", "m", "man", "men"}:
+        return "male"
+    raise ValueError(f"gender must be 'male' or 'female', got {gender!r}")
+
+
+def gender_class_words(gender: str) -> tuple[str, ...]:
+    return GENDER_CLASS_WORDS[normalize_gender(gender)]
+
+
+def _gender_word_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
+    alt = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"\b(?:{alt})\b", re.IGNORECASE)
+
+
+def filter_prompts_by_gender(prompts: list[Prompt], gender: str) -> list[Prompt]:
+    """Keep prompts whose positive text mentions a class noun for ``gender``."""
+    pattern = _gender_word_pattern(gender_class_words(gender))
+    return [prompt for prompt in prompts if pattern.search(prompt.pos)]
+
+
 def inject_trigger(pos: str, trigger: str, class_word: str) -> str:
     """Insert a DreamBooth trigger before the class word (``of man`` -> ``of sks man``)."""
     if re.search(rf"\b{re.escape(trigger)}\s+{re.escape(class_word)}\b", pos):
         return pos
     return re.sub(rf"\bof {re.escape(class_word)}\b", f"of {trigger} {class_word}", pos, count=1)
+
+
+def inject_subject_trigger(
+    pos: str,
+    *,
+    trigger: str,
+    class_word: str,
+    gender: str,
+) -> str:
+    """Normalize gendered subject nouns and inject the DreamBooth trigger.
+
+    Matches ``of [young|old] {woman|girl|bride|...}`` (depending on gender) and
+    rewrites the first hit to ``of {trigger} {class_word}`` so a LoRA trained as
+    ``sks woman`` still fires on girl/bride prompts (and likewise for male).
+    """
+    if re.search(rf"\b{re.escape(trigger)}\s+{re.escape(class_word)}\b", pos):
+        return pos
+
+    words = gender_class_words(gender)
+    alt = "|".join(re.escape(word) for word in words)
+    pattern = re.compile(
+        rf"\bof\s+(?:(?:young|old)\s+)?(?:{alt})\b",
+        re.IGNORECASE,
+    )
+    replaced, count = pattern.subn(f"of {trigger} {class_word}", pos, count=1)
+    if count:
+        return replaced
+
+    # Fallback: bare class word with no ``of`` (rare), then classic inject.
+    bare = _gender_word_pattern(words)
+    replaced, count = bare.subn(f"{trigger} {class_word}", pos, count=1)
+    if count:
+        return replaced
+    return inject_trigger(pos, trigger, class_word)
 
 
 def load_training_sample_prompts(

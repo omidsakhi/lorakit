@@ -15,7 +15,8 @@ lorakit is a small, fast, config-driven toolkit for SDXL DreamBooth / LoRA train
 - **Fits your GPU** — train on 24 GB in bf16, or drop to **4-bit QLoRA** to fit 16 GB cards.
 - **Live previews** — generates sample images during training so you can watch progress.
 - **Resumable** — checkpoints let you stop and continue.
-- Flexible optimizers (AdamW, AdamW8bit, AdamWScheduleFree, Prodigy), LR schedulers, and LoRA targets for both the UNet and text encoders.
+- Flexible optimizers (AdamW, AdamW8bit, AdamWScheduleFree, AnchoredAdamW), LR schedulers, and LoRA targets for both the UNet and text encoders.
+- Optional latent face background preservation, which keeps LoRA changes focused on the subject rather than memorizing the training scene — including a 19-class [face parser](docs/face-parsing.md) that keeps clothing out of the LoRA entirely.
 
 ---
 
@@ -23,12 +24,12 @@ lorakit is a small, fast, config-driven toolkit for SDXL DreamBooth / LoRA train
 
 - An NVIDIA GPU (16 GB+ recommended; 24 GB for the fastest bf16 path).
 - [uv](https://docs.astral.sh/uv/) for dependency management.
-- PyTorch wheels are resolved from the [CUDA 12.6 index](https://download.pytorch.org/whl/cu126) automatically.
+- PyTorch wheels are resolved from the [CUDA 13.2 index](https://download.pytorch.org/whl/cu132) automatically.
 
 ## Installation
 
 ```bash
-git clone https://github.com/omidsakhi/lorakit.git
+git clone https://github.com/TensorHarmony/lorakit.git
 cd lorakit
 uv sync
 ```
@@ -99,6 +100,37 @@ All examples live in `config/examples/`. Copy one into `config/` and edit it.
 | `train_lora_sdxl_16gb_t4_1.0.yaml` | 16 GB | — | Low-VRAM (e.g. T4) using 4-bit quantization. |
 
 Not sure? On a 24 GB card use the **bf16 metal** config. On 16 GB, use the **T4** config.
+
+---
+
+## Focusing training on the subject
+
+By default the LoRA learns everything in your images, including the room and the
+outfit. `face_mask_source` picks a per-image mask that tells training which pixels
+matter:
+
+| Source | Region | CLI | Docs |
+|---|---|---|---|
+| `face_parse` | 19-class segmentation: clothing excluded, face skin down-weighted | `lorakit-parse` | [face parsing](docs/face-parsing.md) |
+| `subject_mask` | BiRefNet subject silhouette | `lorakit-masks` | — |
+| `manifest` | InsightFace face box | `lorakit-faces` | [latent face objectives](docs/background-preservation.md) |
+
+`face_parse` is the most precise: it is the only source that separates clothing
+from the person, and it also unlocks zoom-out augmentation.
+
+```yaml
+config:
+  train:
+    face_mask_source: face_parse
+    face_focus:
+      enabled: true
+    background_preservation:
+      enabled: true
+      weight: 0.5
+```
+
+Masks are built automatically on the first run; the CLIs just let you inspect
+them beforehand.
 
 ---
 
@@ -222,7 +254,7 @@ Ready-made profiling configs live in `config/examples/profile_4bit.yaml` and `co
 ## Roadmap
 
 - [ ] Prior preservation option
-- [ ] EMA (Exponential Moving Average) support
+- [x] EMA (Exponential Moving Average) support
 - [ ] FLUX.1 integration
 
 ## Contributing

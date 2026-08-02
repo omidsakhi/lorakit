@@ -8,6 +8,10 @@ venv/
 *.json
 *.egg-info/
 
+# A downloaded model repo cannot load without its config.json, which the
+# blanket *.json rule above would otherwise drop.
+!models/**/config.json
+
 # Runtime YAML copies (e.g. saved training config under output/)
 output/**/*.yaml
 

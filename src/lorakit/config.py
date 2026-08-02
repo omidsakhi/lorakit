@@ -33,9 +33,7 @@ def resolve_config_path(config_file_path: str | Path) -> Path:
         if candidate.is_file():
             return candidate
 
-    raise ValueError(
-        f"config file {path} does not exist (cwd={cwd})"
-    )
+    raise ValueError(f"config file {path} does not exist (cwd={cwd})")
 
 
 def _search_bases(config_path: Path | None) -> list[Path]:

@@ -11,8 +11,11 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Omid Sakhi", email = "omid.sakhi@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
-    "torch",
-    "torchvision",
+    # 2.13 + torch.compile is ~25% slower on mixed-rank DoRA SDXL training
+    # (measured ~1.30 it/s vs ~1.73-1.80 on 2.12). Stay on 2.12 until that
+    # regresses; wheels come from the cu132 index below.
+    "torch>=2.12.1,<2.13",
+    "torchvision>=0.27.1,<0.28",
     "pyyaml",
     "accelerate",
     "transformers",
@@ -24,33 +27,59 @@ dependencies = [
     # ships with torch; on Windows it must be installed separately, so we only
     # require the Windows wheel here.
     "triton-windows; platform_system == 'Windows'",
-    "prodigyopt>=1.1.2",
     "schedulefree>=1.4.1",
     "vulture>=2.16",
     "ruff>=0.15.15",
+    # Required by BiRefNet's remote modeling code, which builds the subject alpha
+    # masks. Pixel mask sources (`subject_mask`, `face_parse`) need them.
+    "timm>=1.0.0",
+    "einops>=0.8.0",
+    "kornia>=0.7.0",
+    # Face detection for faces.json and for cropping mid-train samples before
+    # scoring them with ArcFace.
+    "insightface>=0.7.3",
+    # 1.28+ needs CUDA 13 runtime DLLs; pairs with torch cu132.
+    "onnxruntime-gpu>=1.19,<1.29",
 ]
+
+# Everything above is a plain dependency on purpose. A run builds whatever
+# artifacts it is missing -- face boxes, alpha masks, parse maps -- and loads the
+# sample-scoring detector partway through training, so a missing extra surfaces
+# as a crash minutes into a job that cannot install the extra for itself.
 
 [dependency-groups]
 dev = ["ruff", "vulture"]
 
 [project.scripts]
 lorakit = "lorakit.cli.lorakit:main"
+lorakit-faces = "lorakit.cli.faces:main"
+lorakit-masks = "lorakit.cli.masks:main"
+lorakit-parse = "lorakit.cli.parse:main"
+lorakit-export-arcface = "lorakit.cli.export_arcface:main"
+lorakit-creativity = "lorakit.cli.creativity:main"
+lorakit-prompt-sweep = "lorakit.cli.prompt_sweep:main"
 
 [project.urls]
-Homepage = "https://github.com/omidsakhi/lorakit"
-Repository = "https://github.com/omidsakhi/lorakit"
+Homepage = "https://github.com/TensorHarmony/lorakit"
+Repository = "https://github.com/TensorHarmony/lorakit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lorakit"]
 
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
+torch = { index = "pytorch-cu132" }
+torchvision = { index = "pytorch-cu132" }
+
+[tool.uv]
+# InsightFace declares the CPU runtime, but co-installing it with the GPU wheel
+# breaks CUDA provider discovery.
+exclude-dependencies = ["onnxruntime"]
+override-dependencies = ["onnxruntime-gpu>=1.19,<1.29"]
 
 [tool.ruff]
 target-version = "py310"

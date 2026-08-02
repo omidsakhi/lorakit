@@ -1,4 +1,4 @@
-"""Batch SDXL inference from a JSON prompt file, with optional LoRA comparison."""
+"""Batch SDXL and SDXL Turbo inference from a JSON prompt file."""
 
 from __future__ import annotations
 
@@ -8,18 +8,17 @@ import logging
 from pathlib import Path
 
 import torch
-from diffusers import (
-    DDIMScheduler,
-    DDPMScheduler,
-    DPMSolverMultistepScheduler,
-    EulerDiscreteScheduler,
-    StableDiffusionXLPipeline,
-    UniPCMultistepScheduler,
-)
+from diffusers import StableDiffusionXLPipeline
 from tqdm import tqdm
 
 from lorakit.config import resolve_user_path
 from lorakit.jobs import BaseJob
+from lorakit.lora_scaling import (
+    apply_training_lora_scaling,
+    find_training_target_modules,
+    format_scaling_report,
+)
+from lorakit.models import get_model_type, make_scheduler, sample_defaults
 from lorakit.prompts import load_prompts, sample_prompts
 
 
@@ -37,26 +36,6 @@ def _parse_dtype(dtype_str: str) -> tuple[torch.dtype, str]:
     if dtype_str in ("float32", "fp32"):
         return torch.float32, "no"
     raise ValueError("Invalid dtype. Supported dtypes are bf16, fp16, fp32, and float32.")
-
-
-def _make_scheduler(pipeline: StableDiffusionXLPipeline, name: str):
-    cfg = pipeline.scheduler.config
-    name = name.lower()
-    if name == "ddpm":
-        return DDPMScheduler.from_config(cfg)
-    if name == "ddim":
-        return DDIMScheduler.from_config(cfg)
-    if name == "euler":
-        return EulerDiscreteScheduler.from_config(cfg)
-    if name == "dpmpp":
-        return DPMSolverMultistepScheduler.from_config(
-            cfg, algorithm_type="dpmsolver++", use_karras_sigmas=True
-        )
-    if name == "unipc":
-        return UniPCMultistepScheduler.from_config(cfg)
-    raise ValueError(
-        f"Unsupported scheduler: {name!r} (use ddpm, ddim, euler, dpmpp, or unipc)"
-    )
 
 
 def _resolve_lora_weights(path: str | Path) -> Path:
@@ -104,17 +83,11 @@ class SampleJob(BaseJob):
         prompt_file = sample_config.get("prompt_file", None)
         if not prompt_file:
             raise ValueError("sample.prompt_file is required")
-        self._prompt_file = resolve_user_path(
-            prompt_file, config_path=config_path, must_exist=True
-        )
+        self._prompt_file = resolve_user_path(prompt_file, config_path=config_path, must_exist=True)
 
         self._num_prompts = sample_config.get("num_prompts", None)
         # Only controls which prompts are selected from the file, not generation seeds.
         self._sampling_seed = sample_config.get("sampling_seed", 42)
-        self._guidance_scale = sample_config.get("guidance_scale", 7.0)
-        self._sample_steps = sample_config.get(
-            "steps", sample_config.get("sample_steps", 20)
-        )
         self._resolution = sample_config.get("resolution", 1024)
         self._scheduler = sample_config.get("scheduler", None)
 
@@ -135,6 +108,13 @@ class SampleJob(BaseJob):
         self._revision = model_config.get("revision", None)
         self._local_files_only = model_config.get("local_files_only", False)
         self._variant = model_config.get("variant", None)
+        self._model_type = get_model_type(model_config)
+
+        default_guidance_scale, default_steps = sample_defaults(self._model_type)
+        self._guidance_scale = sample_config.get("guidance_scale", default_guidance_scale)
+        self._sample_steps = sample_config.get(
+            "steps", sample_config.get("sample_steps", default_steps)
+        )
 
         dtype_str = config.get("dtype", sample_config.get("dtype", None))
         if dtype_str is None:
@@ -172,6 +152,7 @@ class SampleJob(BaseJob):
         manifest_path = self._experiment_folder / "manifest.jsonl"
 
         print(f"Loading pipeline: {self._model_name_or_path}")
+        print(f"Model type: {self._model_type}")
         pipeline = StableDiffusionXLPipeline.from_pretrained(
             self._model_name_or_path,
             revision=self._revision,
@@ -183,7 +164,7 @@ class SampleJob(BaseJob):
         pipeline.set_progress_bar_config(disable=True)
         pipeline = pipeline.to(self._device)
         if self._scheduler is not None:
-            pipeline.scheduler = _make_scheduler(pipeline, self._scheduler)
+            pipeline.scheduler = make_scheduler(pipeline.scheduler, self._scheduler)
             print(f"Scheduler: {self._scheduler}")
 
         lora_path = None
@@ -201,6 +182,17 @@ class SampleJob(BaseJob):
 
             if variant == "lora":
                 pipeline.load_lora_weights(str(lora_path))
+                # Exported LoRA weights carry no per-module alpha, so PEFT
+                # reloads them at the wrong strength when ranks differ.
+                targets = find_training_target_modules(lora_path, self._lora_weights)
+                if targets:
+                    report = apply_training_lora_scaling(pipeline, targets)
+                    print(f"LoRA scaling restored ({format_scaling_report(report)})")
+                else:
+                    print(
+                        "WARNING: no training config.yaml found next to the LoRA "
+                        "weights; adapter strength may be weaker than training."
+                    )
 
             for prompt in tqdm(prompts, desc=f"sample/{variant}"):
                 gen_seed = self._generation_seed(prompt.seed)

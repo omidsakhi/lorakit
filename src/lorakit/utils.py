@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from lorakit.config import get_config, resolve_user_path
+from lorakit.config import get_config
 
 
 def save_config(config, output_path):
@@ -27,6 +27,31 @@ def save_config(config, output_path):
         yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
 
+def resolve_output_folder(output_folder: str | Path) -> Path:
+    """Create an output root relative to the current process directory."""
+    output_path = Path(output_folder).expanduser()
+    if not output_path.is_absolute():
+        output_path = Path.cwd() / output_path
+    output_path.mkdir(parents=True, exist_ok=True)
+    return output_path.resolve()
+
+
+def ensure_fresh_experiment_folder(
+    experiment_folder: str | Path, *, resume_from_checkpoint=None
+) -> None:
+    """Refuse to start a fresh train that would overwrite an existing run.
+
+    Resume is allowed to reuse the folder so checkpoints / logs can continue.
+    """
+    path = Path(experiment_folder)
+    if path.exists() and resume_from_checkpoint is None:
+        raise FileExistsError(
+            f"Experiment folder already exists: {path}. "
+            "Bump `version` for a new run, or set train.resume_from_checkpoint "
+            "to resume without overwriting previous logs and metrics."
+        )
+
+
 def get_job(config_path: str | dict | OrderedDict):
     config, config_file = get_config(config_path)
     if not config["job"]:
@@ -47,7 +72,12 @@ def get_job(config_path: str | dict | OrderedDict):
         output_folder = config.get("output_folder", None)
         if not output_folder:
             raise ValueError("config file is invalid. Missing 'output_folder' key")
-        output_folder = resolve_user_path(output_folder, config_path=config_file)
+        output_folder = resolve_output_folder(output_folder)
+        experiment_folder = Path(output_folder) / f"{name}_{version}"
+        resume_from_checkpoint = (config["config"].get("train") or {}).get("resume_from_checkpoint")
+        ensure_fresh_experiment_folder(
+            experiment_folder, resume_from_checkpoint=resume_from_checkpoint
+        )
         train_job = TrainJob(
             config["config"], version, name, str(output_folder), config_path=config_file
         )
@@ -69,7 +99,7 @@ def get_job(config_path: str | dict | OrderedDict):
         output_folder = config.get("output_folder", None)
         if not output_folder:
             raise ValueError("config file is invalid. Missing 'output_folder' key")
-        output_folder = resolve_user_path(output_folder, config_path=config_file)
+        output_folder = resolve_output_folder(output_folder)
         sample_job = SampleJob(
             config["config"], version, name, str(output_folder), config_path=config_file
         )

@@ -1,0 +1,749 @@
+---
+# =============================================================================
+# Lorakit educational reference — SDXL DreamBooth / LoRA (DoRA) training
+# =============================================================================
+#
+# PURPOSE
+#   This file documents every TrainJob YAML key the trainer currently accepts.
+#   It is meant to be read, copied, and trimmed — not used as-is for production.
+#
+# HOW TO USE
+#   1. Copy to config/<your_subject>.yaml (or edit a copy under config/examples/).
+#   2. Set name, version, instant_prompt, class_prompt, dataset_folder.
+#   3. Delete or comment out sections you do not need (identity loss, etc.).
+#   4. Run:  uv run lorakit path/to/your.yaml
+#
+# OUTPUT LAYOUT
+#   Experiments land in:  {output_folder}/{name}_{version}/
+#   That folder holds config.yaml, checkpoints, samples/, logs/, and final LoRA
+#   weights (pytorch_lora_weights.safetensors).
+#
+# PATHS
+#   Relative paths resolve against the process cwd and the repo root. Absolute
+#   paths always work. The token [name] in any string is replaced with this
+#   config file's stem (filename without .yaml).
+#
+# RELATED EXAMPLES (smaller, hardware-tuned recipes)
+#   train_lora_sdxl_24gb_4090_bf16_metal_1.0.yaml  — fast bf16 / compile recipe
+#   train_lora_sdxl_24gb_4090_4bit_1.0.yaml        — QLoRA 4-bit
+#   train_lora_sdxl_16gb_t4_1.0.yaml               — tighter VRAM
+#   batch_sample_prompts.yaml                     — job: sample (batch inference)
+#   profile_bf16.yaml / profile_4bit.yaml         — profiler-focused runs
+#
+# NOTE ON DEAD / LEGACY KEYS
+#   description          — human notes only; runtime ignores it
+#   config.logging_folder — ignored; logs always go under the experiment folder
+#   train.unet_lora      — alias of train.lora (prefer train.lora)
+#   train.lora.rank / lora_alpha at the LoRA root — IGNORED; put rank/alpha
+#                         inside target_modules values (see LoRA section)
+#   list-style target_modules — INVALID; must be a mapping name → (rank, alpha)
+#
+# =============================================================================
+
+job: train
+# job: train  — DreamBooth / LoRA training (this file)
+# job: sample — batch inference only; see the SampleJob appendix at the bottom
+
+version: "1.0"
+# Suffix for the experiment folder: {name}_{version}.
+# Bump this whenever you want a fresh run that does not overwrite a previous one.
+
+name: "my_subject"
+# Prefix for the experiment folder and checkpoint names.
+# Use a short slug (letters, digits, underscores).
+
+output_folder: "output"
+# Root directory for all experiments. Created if missing.
+# Final path: {output_folder}/{name}_{version}/
+
+description: >
+  Optional human-readable notes. The trainer never reads this field — it is
+  copied into the saved config for your own bookkeeping only.
+
+config:
+  # ---------------------------------------------------------------------------
+  # Runtime / prompts (config root)
+  # ---------------------------------------------------------------------------
+
+  # logging_folder: "logs"
+  # DEAD KEY — not consumed. Accelerate logs live under the experiment folder.
+
+  device: "cuda:0"
+  # Torch device string. Examples: "cuda:0", "cuda:1", "cpu".
+  # Default if omitted: "cpu".
+
+  allow_tf32: true
+  # Enable CUDA TF32 for matmul / cuDNN on Ampere+ GPUs (faster, tiny precision
+  # tradeoff). Safe default for training on RTX 30/40-class cards. Default: false.
+
+  matmul_precision: "high"
+  # torch.set_float32_matmul_precision. One of: "highest" | "high" | "medium".
+  # Omit to leave PyTorch defaults. "high" pairs well with allow_tf32: true.
+
+  cudnn_benchmark: true
+  # If true, enable torch.backends.cudnn.benchmark (often faster for fixed
+  # resolution training). Omit to leave the default alone.
+
+  instant_prompt: "sks"
+  # REQUIRED. Subject trigger token inserted into instance captions
+  # (e.g. "a photo of sks woman"). Prefer a rare token like sks / ohwx.
+
+  class_prompt: "woman"
+  # REQUIRED. Class noun for the subject (man / woman / person / dog / …).
+  # Used in captions and prior-preservation class prompts when enabled.
+
+  # ===========================================================================
+  # TRAIN
+  # ===========================================================================
+  train:
+    # -------------------------------------------------------------------------
+    # Dataset
+    # -------------------------------------------------------------------------
+    dataset_folder: "data/datasets/my_subject/train"
+    # REQUIRED. Folder of instance images (jpg/png/webp, …).
+    # Prefer 10–20 well-lit, varied photos of one subject.
+
+    repeats: 1
+    # How many times each image is repeated per epoch (int ≥ 1). Default: 1.
+    # With augmentation.variants > 1 you usually leave this at 1.
+
+    resolution: 1024
+    # REQUIRED. Square training resolution in pixels (SDXL native is 1024).
+
+    center_crop: false
+    # true  → center crop to square
+    # false → random crop (more variety; default)
+
+    random_flip: true
+    # Horizontal flip when building the base dataset samples. Default: false.
+    # Separate from augmentation.random_flip (precomputed geometric variants).
+
+    face_manifest: null
+    # Path to faces.json (InsightFace boxes). null → look for
+    # {dataset_folder}/faces.json. Needed for identity loss / ArcFace sample
+    # metrics / some mask paths.
+
+    auto_face_manifest: true
+    # If faces.json is missing and something needs it, build it automatically.
+    # Default: true.
+
+    face_mask_source: "auto"
+    # Where the per-image subject / face mask for loss reweighting comes from:
+    #   auto         — prefer manifest when faces.json exists / can be built
+    #   face_parse   — offline 19-class BiSeNet segmentation (most precise: it
+    #                  separates clothing from the subject and can weight face
+    #                  skin differently from hair/neck)
+    #   subject_mask — offline BiRefNet alpha silhouettes
+    #   manifest     — boxes from faces.json expanded to a soft mask
+    # Default: "auto".
+
+    dump_face_masks: true
+    # Write debug mask overlays under the experiment folder. Default: true.
+
+    subject_mask:
+      # Offline full-subject alpha masks (BiRefNet). Used when face_mask_source
+      # is subject_mask or auto (and masks exist / can be built).
+      mask_folder: null
+      # Output / input folder for masks. null → {dataset_folder}/masks.
+
+      auto_build: true
+      # Run BiRefNet to create missing masks. Default: true.
+
+      model_id: "ZhengPeng7/BiRefNet"
+      # Hugging Face id (or local path) for the background-removal model.
+      # The default is the general salient-object checkpoint, which on indoor
+      # portraits can read the furniture the subject leans on as part of the
+      # salient object. Because the anchor is `1 - alpha`, anything the alpha
+      # wrongly claims can never be anchored, so it is worth checking the
+      # rendered masks before a long run. Alternatives:
+      #   ZhengPeng7/BiRefNet-portrait    — portrait matting (P3M-10k/TR-humans)
+      #   ZhengPeng7/BiRefNet_HR-matting  — as above but trained at 2048; the
+      #                                     tightest person/scene split here,
+      #                                     and worth the 4x cost on cluttered
+      #                                     interiors. Pair with input_size 2048.
+      # A local directory works too, which keeps a run off the network:
+      #   models/birefnet-hr-matting      — see its model_card.md
+      # Changing this invalidates cached masks: the model and input_size are
+      # recorded in masks.json and auto_build rebuilds when they differ.
+
+      input_size: 1024
+      # Square size fed to BiRefNet (int > 0). Default: 1024. Match the
+      # checkpoint's training resolution (2048 for the _HR variants).
+
+      min_coverage: 0.01
+      # Reject silhouettes covering less than this fraction of the image
+      # (float in [0, 1)). Default: 0.01.
+
+      device: "cuda"
+      # Device for mask building only: "cuda" | "cpu". Default: "cuda".
+
+    face_parse:
+      # Offline 19-class face parsing (BiSeNet). Used when face_mask_source is
+      # face_parse. See docs/face-parsing.md.
+      parse_folder: null
+      # Output / input folder for label maps. null → {dataset_folder}/face_parse.
+
+      auto_build: true
+      # Run BiSeNet to create missing parse maps. Default: true.
+
+      model_path: "models/face-parsing-bisenet-resnet34/bisenet_resnet34.pt"
+      # Path to the BiSeNet checkpoint. Only read when maps must be built.
+
+      backbone: "resnet34"
+      # Must match the checkpoint: "resnet18" | "resnet34". Default: "resnet34".
+
+      input_size: 512
+      # Square size fed to BiSeNet (int > 0). Default: 512 (its training size).
+
+      min_coverage: 0.01
+      # Reject a parse whose subject region (skin/features/neck/hair) covers less
+      # than this fraction of the image (float in [0, 1)). Default: 0.01.
+
+      device: "cuda"
+      # Device for parsing only: "cuda" | "cpu". Default: "cuda".
+
+      background_source: "subject_mask"
+      # Which model decides what counts as background to anchor:
+      #   subject_mask — BiRefNet alpha (default). The parser is trained on face
+      #                  crops and mislabels dark furniture and bare arms as
+      #                  hair/skin out in the scene; the alpha does not, so it
+      #                  owns the person/scene split and the parse map only
+      #                  grades weights inside the person. Reads the
+      #                  subject_mask block above.
+      #   parse        — the parser's own background/cloth classes. Saves the
+      #                  second segmentation pass and does anchor clothing, but
+      #                  it inherits those stray labels.
+
+      class_weights:
+        # Per-pixel diffusion-loss weight in [0, 1]. Keys are groups or
+        # individual CelebAMask-HQ classes (skin, l_brow,
+        # r_brow, l_eye, r_eye, eye_g, l_ear, r_ear, ear_r, nose, mouth, u_lip,
+        # l_lip, neck, neck_l, cloth, hair, hat, background); an individual class
+        # overrides its group.
+        skin: 0.5
+        # Skin is the largest, most repetitive region; halving it stops it from
+        # dominating the loss. Default: 0.5.
+
+        hair: 1.0
+        neck: 1.0
+        features: 1.0
+        # features = brows, eyes, ears, nose, mouth, lips. Default: 1.0.
+
+        cloth: 0.0
+        # 0.0 keeps the outfit out of the LoRA entirely. Default: 0.0.
+
+        accessories: 0.0
+        # accessories = eyeglasses, earring, necklace, hat. Default: 0.0.
+
+        background: 0.0
+        # Default: 0.0.
+
+    face_detector:
+      mask_edge_sharpness: 80.0
+      # Edge softness when rasterizing manifest face boxes into masks.
+      # Default: 80.0.
+
+      trust_radius: 0
+      # How far from the detected face box a mask source is still believed to
+      # mean "subject", measured in face-box widths/heights from its centre.
+      # Pixels beyond it are dropped from the trained region and anchored as
+      # background instead. This is the fix for a salient-object alpha that
+      # swallows the sofa behind the sitter while the parser labels that same
+      # sofa `hair` -- without it such a region is trained *and* left out of
+      # the anchor. Requires a face manifest. 0 disables (mask sources are
+      # taken at face value). Typical: 2.0; below ~1.5 starts clipping hair.
+
+    augmentation:
+      # Precompute geometric variants of each instance image (zoom + optional
+      # rotation + flip). Multiplies effective dataset size without online
+      # rand-aug cost.
+      variants: 1
+      # Variants per source image (int ≥ 1). 1 = no extra variants. Typical face
+      # recipes often use 4–8.
+
+      scale_min: 1.0
+      # Minimum zoom in [0.25, scale_max]. 1.0 = no crop-in. Below 1.0 the image
+      # is shrunk and the canvas padded, which requires face_mask_source
+      # face_parse or subject_mask so padding can be excluded from training
+      # and anchored as background.
+      # Default: 1.0.
+
+      scale_max: 1.0
+      # Maximum zoom (≥ scale_min). e.g. 1.4 = up to 40% crop-in. Default: 1.0.
+
+      rotation_degrees: 0
+      # Max absolute in-plane rotation in degrees. Each non-baseline variant
+      # samples uniformly from [-rotation_degrees, +rotation_degrees].
+      # Values > 0 invent corner canvas and therefore require face_mask_source
+      # face_parse or subject_mask (same rule as scale_min < 1.0).
+      # Default: 0 (no rotation). Typical face recipes: 10–15.
+
+      random_flip: false
+      # Also generate horizontally flipped variants. Default: false.
+
+      pad_mode: "reflect"
+      # How zoom-out fills the canvas: "reflect" | "edge" | "constant".
+      # Only used when scale_min < 1.0. Default: "reflect".
+
+      seed: 42
+      # RNG seed for aug. Default: train.seed if set, else 42.
+
+    # -------------------------------------------------------------------------
+    # Loop / precision / performance
+    # -------------------------------------------------------------------------
+    batch_size: 1
+    # Per-device micro-batch size. Default: 1.
+
+    gradient_accumulation_steps: 1
+    # Accumulate this many micro-batches before an optimizer step (int ≥ 1).
+    # Effective batch ≈ batch_size × gradient_accumulation_steps × num_processes.
+    # Default: 1.
+
+    max_train_steps: 1200
+    # Hard cap on optimizer steps. null → derive from epochs / dataloader length.
+    # Prefer setting this explicitly for DreamBooth LoRA.
+
+    save_every: 200
+    # Write an Accelerate checkpoint every N steps. 0 = never. Default: 0.
+
+    checkpoints_total_limit: 8
+    # Keep at most this many checkpoint_* folders (oldest deleted). null = unlimited.
+
+    max_grad_norm: 1.0
+    # Global grad-norm clip. null = disable clipping (still logs norm). Default: null.
+
+    seed: 42
+    # Global training seed. null = nondeterministic. Default: null.
+
+    dtype: bf16
+    # REQUIRED. Training / mixed-precision dtype:
+    #   bf16 | bfloat16 | fp16 | float16 | fp32 | float32
+    # Prefer bf16 on Ampere+; use fp16 on older GPUs; fp32 is slow / VRAM-heavy.
+
+    gradient_checkpointing: false
+    # Trade compute for VRAM (slower backward). Enable on ≤16GB cards. Default: false.
+
+    cache_latents: true
+    # Encode images with the VAE once and reuse latents. Faster; disable if you
+    # train the text encoder with changing crops that need fresh encodes.
+    # Default: false.
+
+    channels_last: false
+    # Convert UNet to channels-last memory format. Often slower for SDXL LoRA —
+    # leave false unless you measure a win. Default: false.
+
+    torch_compile: false
+    # Compile the UNet with TorchInductor (needs Triton). First step pays a
+    # one-time compile cost. Default: false. With mixed-rank LoRA/DoRA, lorakit
+    # relaxes Dynamo's static parameter-shape guards so compile does not fall
+    # back to a slow eager path after a few recompiles.
+
+    torch_compile_mode: "default"
+    # Inductor mode when torch_compile is true:
+    #   "default" | "reduce-overhead" | "max-autotune"
+
+    train_text_encoder: false
+    # Also attach / train LoRA on both CLIP text encoders. Uses more VRAM and
+    # needs text_encoder_lora below. Default: false.
+
+    num_workers: 4
+    # DataLoader worker processes. Default: 1. Raise on fast GPUs / SSDs.
+
+    loss_decay: 0.995
+    # EMA factor for the *displayed / logged* scalar loss only (not weights).
+    # Default: 0.995.
+
+    use_ema: false
+    # If true, maintain an exponential moving average of trainable LoRA/DoRA
+    # parameters. Mid-train samples and the final exported LoRA use EMA weights.
+    # Checkpoints still store live training weights + a sibling ema_lora.pt for
+    # resume. Default: false.
+
+    ema_decay: 0.99
+    # Decay for LoRA weight EMA when use_ema is true. Must be in [0, 1).
+    # Default: 0.999.
+    #
+    # SIZE IT TO THE RUN. The averaging horizon is ~1/(1-decay) steps:
+    #   0.99   → ~100 steps
+    #   0.999  → ~1,000 steps
+    #   0.9999 → ~10,000 steps
+    # Aim for 5–15% of max_train_steps. DreamBooth LoRA runs are short (1–3k
+    # steps), so 0.99–0.995 is usually right; 0.9999 averages over far more
+    # steps than the run contains and samples will barely move.
+
+    # resume_from_checkpoint: "latest"
+    # Resume Accelerate state from a checkpoint under the experiment folder.
+    #   "latest"                         — most recent checkpoint_* folder
+    #   "checkpoint_my_subject_1.0_0000000400" — specific folder basename
+    # Also restores ema_lora.pt when present.
+
+    skip_pre_train_sample: false
+    # Skip the sample generated at step 0 (before training). Prefer
+    # sample.skip_initial when a sample block is present (it overrides this).
+
+    disable_sampling: false
+    # Disable all mid-train sampling (including step 0). Default: false.
+
+    snr_gamma: 5.0
+    # Min-SNR weighting for the diffusion loss (float > 0). Helps extreme
+    # timesteps. null = disable. Incompatible with do_edm_style_training.
+    # Common values: 5.0. Default: null.
+
+    do_edm_style_training: false
+    # EDM-style training path. Blocks SNR weighting and face-detector-based
+    # objectives. Leave false for standard SDXL DreamBooth. Default: false.
+
+    # Optional per-section training-loop profiler (default off).
+    # Env overrides: LORAKIT_PROFILE, LORAKIT_PROFILE_WARMUP, LORAKIT_PROFILE_EVERY
+    # profile: true                    # shorthand for {enabled: true}
+    profile:
+      enabled: false
+      warmup: 3
+      # Steps excluded from rolling averages at the start.
+      report_every: 0
+      # Print a timing report every N steps. 0 = only print a summary at the end.
+
+    # -------------------------------------------------------------------------
+    # Timestep band
+    # -------------------------------------------------------------------------
+    timestep_range:
+      # Restrict which diffusion timesteps are sampled during training.
+      # Fractions of noise_scheduler.config.num_train_timesteps (usually 1000).
+      min_fraction: 0.0
+      # Inclusive lower bound in [0, 1]. Default: 0.0.
+
+      max_fraction: 1.0
+      # Upper bound in [0, 1]; must be > min_fraction. Default: 1.0.
+      # Example (cleaner faces / less high-noise chaos): min 0.0, max 0.7
+
+    # -------------------------------------------------------------------------
+    # Optimizer + LR schedule
+    # -------------------------------------------------------------------------
+    optimizer: "adamw"
+    # REQUIRED. Case-insensitive name. Supported:
+    #   adamw
+    #   adamw8bit                 — bitsandbytes 8-bit AdamW (saves optimizer VRAM)
+    #   adamwschedulefree         — Schedule-Free AdamW
+    #   adamwanchored             — Anchored AdamW (lorakit)
+    #   adamwanchoredschedulefree — Anchored + Schedule-Free
+
+    optimizer_params:
+      # REQUIRED mapping — kwargs forwarded to the optimizer constructor.
+      # AdamW / AdamW8bit / Anchored family typically need:
+      lr: 0.0001
+      # Peak learning rate. LoRA UNet-only often 1e-4 – 5e-4.
+
+      betas: [0.9, 0.999]
+      # Adam β1, β2.
+
+      weight_decay: 0.01
+      # Decoupled weight decay.
+
+      eps: 1.0e-8
+      # Adam epsilon.
+
+      # Schedule-Free / Anchored-SF extras (uncomment when using those opts):
+      # warmup_steps: 100
+      # r: 0.0
+      # weight_lr_power: 2.0
+      # amsgrad: false            # anchored AdamW only
+
+    lr_scheduler: "constant"
+    # REQUIRED. Diffusers get_scheduler name, e.g.:
+    #   constant | constant_with_warmup | linear | cosine |
+    #   cosine_with_restarts | polynomial
+    # Note: Schedule-Free optimizers manage LR internally; the scheduler is
+    # still constructed but may not step the same way — keep a simple constant
+    # (+ warmup params for logging/compat) unless you know you need otherwise.
+
+    lr_scheduler_params:
+      # REQUIRED mapping — kwargs for get_scheduler.
+      num_warmup_steps: 0
+      num_training_steps: 1200
+      # Should match (or exceed) max_train_steps for decaying schedules.
+      num_cycles: 1
+      # Used by cosine_with_restarts.
+      power: 1
+      # Used by polynomial.
+
+    # -------------------------------------------------------------------------
+    # LoRA / DoRA (UNet) — REQUIRED
+    # -------------------------------------------------------------------------
+    lora:
+      # Alias: unet_lora (prefer lora).
+      #
+      # target_modules MUST be a mapping:
+      #   module_name: [rank, lora_alpha]
+      # Also accepted per value: "(16, 32)" string, or a single int (rank=alpha).
+      #
+      # Diffusers UNet attention / FFN names commonly used:
+      #   to_k, to_q, to_v, to_out.0, ff.net.0.proj, ff.net.2
+      #
+      # scaling ≈ lora_alpha / rank. Matching rank and alpha → scale 1.0.
+
+      use_dora: false
+      # true → Weight-Decomposed LoRA (DoRA). Often better likeness at similar
+      # rank. Default: false.
+
+      init_lora_weights: "gaussian"
+      # PEFT init scheme (typically "gaussian").
+
+      # alpha_pattern_file: "path/to/alpha_pattern.json"
+      # Optional JSON from the perturbation-probe project: block-qualified
+      # alpha mask applied on top of target_modules (UNet only).
+
+      target_modules:
+        to_k: [4, 4]
+        to_q: [4, 4]
+        to_v: [4, 4]
+        to_out.0: [4, 4]
+
+    # Only required when train_text_encoder: true.
+    text_encoder_lora:
+      use_dora: false
+      init_lora_weights: "gaussian"
+      # CLIP text-encoder module names:
+      target_modules:
+        q_proj: [4, 4]
+        k_proj: [4, 4]
+        v_proj: [4, 4]
+        out_proj: [4, 4]
+
+    # -------------------------------------------------------------------------
+    # Face focus (reweight diffusion onto the subject / face mask)
+    # -------------------------------------------------------------------------
+    face_focus:
+      enabled: false
+      # When true, multiply the diffusion loss by a soft mask so the subject
+      # region is emphasized. Needs a mask source (face_parse / subject_mask /
+      # manifest via face_mask_source). With face_parse the mask is the graded
+      # class_weights map. Default: false.
+
+      power: 1.0
+      # Raise the mask to this power in [0, 1] before weighting.
+      # Lower → softer / less aggressive focus. Default: 1.0.
+
+    # -------------------------------------------------------------------------
+    # Soft face-mask knobs (manifest boxes → soft rectangle)
+    # -------------------------------------------------------------------------
+    face_detector:
+      # Name kept for config compatibility. Used when rasterizing faces.json
+      # boxes for face_focus / background_preservation / dump_face_masks.
+      #
+      # Legacy: the same key was formerly accepted under
+      # background_preservation.*; prefer this dedicated block.
+
+      mask_edge_sharpness: 80.0
+      # Soft-mask edge sharpness (> 0). Higher = harder edges. Default: 80.0.
+
+    # -------------------------------------------------------------------------
+    # Background preservation (match base model outside the subject mask)
+    # -------------------------------------------------------------------------
+    background_preservation:
+      enabled: false
+      # When true, add a loss that keeps non-subject latents close to the
+      # frozen base UNet prediction (adapters disabled for the teacher pass).
+      # The anchored region is never simply "everything the diffusion loss did
+      # not fully weight" — half-weighted skin must not be pulled back toward
+      # the base model. With face_mask_source: face_parse it is the scene
+      # outside the person (see face_parse.background_source), which leaves
+      # clothing trained at 0 and anchored at 0.
+
+      weight: 0.5
+      # REQUIRED when enabled (must be > 0). Scale of the BG term.
+      # Typical starting point: 0.25 – 1.0.
+
+    # -------------------------------------------------------------------------
+    # ArcFace identity loss (optional)
+    # -------------------------------------------------------------------------
+    identity_loss:
+      enabled: false
+      # Decode predicted clean latents, crop faces, match ArcFace embeddings
+      # to a reference centroid. Complements (does not replace) diffusion loss.
+
+      backend: "arcface_torch"
+      # Only supported backend today.
+
+      model_id: "models/ms1mv3_arcface_r50_fp16/backbone.pth"
+      # REQUIRED when enabled. Path to the ArcFace R50 backbone weights.
+
+      face_manifest: null
+      # Override faces.json for identity crops. null → use train.face_manifest /
+      # dataset default.
+
+      reference_images_folder: null
+      # Optional extra folder of reference photos for the embedding centroid.
+      # null → use the training dataset images.
+
+      weight: 0.05
+      # Scale of the identity term (≥ 0). Start small (0.01 – 0.1). Default: 0.05.
+
+      background_loss_weight: 0.0
+      # Optional identity-space background term (≥ 0). Default: 0.0.
+
+      max_timestep_fraction: 0.20
+      # Apply identity loss only below this noise fraction. Default: 0.20.
+
+      crop_size: 112
+      # Face crop resolution for ArcFace. Default: 112.
+
+      bbox_padding_fraction: 0.15
+      # Expand detected boxes by this fraction before crop. Default: 0.15.
+
+      decoder_gradient_checkpointing: true
+      # Checkpoint VAE decode during identity backward (saves VRAM). Default: true.
+
+    # -------------------------------------------------------------------------
+    # Prior preservation (DreamBooth class images)
+    # -------------------------------------------------------------------------
+    # NOTE: Prior preservation has historically been fragile in this codebase;
+    # the README still lists it as a roadmap item in places. Prefer leaving
+    # with_prior_preservation: false unless you know you need it.
+    with_prior_preservation: false
+    # class_data_folder: "data/datasets/class_woman"
+    # REQUIRED when with_prior_preservation is true — folder of class images.
+    # num_class_images: 200
+    # Optional cap on how many class images to use.
+    prior_loss_weight: 1.0
+    # Weight of the prior loss term when enabled. Default: 1.0.
+
+  # ===========================================================================
+  # MODEL
+  # ===========================================================================
+  model:
+    name_or_path: "stabilityai/stable-diffusion-xl-base-1.0"
+    # REQUIRED. Hugging Face repo id or local Diffusers folder.
+
+    # type: "sdxl"
+    # Optional family hint for default sample guidance / steps:
+    #   sdxl | sdxl-turbo | sdxl_turbo | turbo
+    # Default: sdxl (guidance 7, steps 20). Turbo defaults guidance 0, steps 4.
+
+    # revision: null
+    # Optional Hugging Face revision / commit / tag.
+
+    # variant: "fp16"
+    # Optional Diffusers weight variant (e.g. fp16) when the repo provides it.
+
+    # local_files_only: false
+    # If true, never hit the Hub (offline). Default: unset/false for train.
+
+    # quantization:
+    #   # QLoRA via bitsandbytes (TrainJob only). Omit entirely for full bf16/fp16.
+    #   bits: 4
+    #   # 4 = NF4 QLoRA, 8 = LLM.int8. Default: 8 if block present.
+    #   quantize_text_encoder: false
+    #   # Also quantize CLIP text encoders. Default: false.
+    #   bnb_4bit_quant_type: "nf4"
+    #   # "nf4" | "fp4" (4-bit only). Default: "nf4".
+    #   bnb_4bit_use_double_quant: true
+    #   # Nested 4-bit quantization. Default: true.
+
+  # ===========================================================================
+  # SAMPLE (mid-train previews) — optional for TrainJob
+  # ===========================================================================
+  # If this block is present you must set either prompt_file OR prompts (+ neg).
+  sample:
+    sample_every: 200
+    # Generate preview images every N optimizer steps. 0 = never (except step 0
+    # unless skipped). Default: 0.
+
+    # --- Prompt source (choose ONE style) ------------------------------------
+
+    # Style A — JSON prompt file (preferred for large / shared prompt sets).
+    # Each entry: {"id", "pos", "neg", "seed"} (perturbation-probe format).
+    # prompt_file: "data/selected_women/selected-women-prompts.json"
+
+    # Style B — inline lists (prompts and neg must be the same length).
+    prompts:
+      - "portrait photo of sks woman, natural light, sharp focus, 50mm, highly detailed"
+      - "sks woman wearing a tailored navy blazer, studio headshot, soft lighting"
+      - "sks woman hiking at sunset, candid photo, cinematic, golden hour"
+    neg:
+      - "painting, illustration, cartoon, blurry, low quality, deformed"
+      - "drawing, sketch, extra fingers, watermark, plastic skin"
+      - "3d render, cgi, overexposed, distorted face, lowres"
+
+    seed: 42
+    # Base seed when not using per-prompt seeds. Default: 42.
+
+    use_prompt_seeds: false
+    # If true, use each prompt row's seed from prompt_file.
+    # Default: true when prompt_file is set, else false.
+
+    walk_seed: true
+    # Increment seed per prompt index. Ignored when use_prompt_seeds is true.
+    # Default: false.
+
+    guidance_scale: 7.0
+    # Classifier-free guidance scale. SDXL default ~7; Turbo often 0.
+
+    sample_steps: 20
+    # Denoising steps. Alias: steps. SDXL ~20–30; Turbo ~4.
+
+    # scheduler: "euler"
+    # Optional override: ddpm | ddim | euler | euler_a | dpmpp | unipc
+    # null / omit → pipeline default.
+
+    skip_initial: false
+    # Skip the step-0 (pre-train) sample. Overrides train.skip_pre_train_sample
+    # when this key is present.
+
+    # Optional ArcFace scoring of generated samples (writes arcface_scores.json).
+    arcface_metric:
+      enabled: false
+
+      model_id: "models/ms1mv3_arcface_r50_fp16/backbone.pth"
+      # REQUIRED when enabled — ArcFace backbone path.
+
+      face_manifest: null
+      # Override faces.json. null → training default.
+
+      reference_images_folder: null
+      # Reference photos for the centroid. null → dataset_folder.
+
+      crop_size: 112
+      bbox_padding_fraction: 0.15
+
+      selection: "largest"
+      # Which detected face to score: "largest" | "highest-confidence".
+
+      det_size: 640
+      # InsightFace detector input size.
+
+      det_threshold: 0.5
+      # Detection confidence threshold in [0, 1].
+
+      insightface_model: "buffalo_l"
+      # InsightFace model pack name.
+
+# =============================================================================
+# APPENDIX — SampleJob (job: sample) keys
+# =============================================================================
+# Batch inference is a separate config file (see batch_sample_prompts.yaml).
+# Sketch of every SampleJob key for reference (NOT part of this train config):
+#
+# job: sample
+# version: "1.0"
+# name: "prompt_batch"
+# output_folder: "output"
+# config:
+#   device: "cuda:0"
+#   allow_tf32: true
+#   dtype: bf16                 # or sample.dtype — REQUIRED for SampleJob
+#   model:
+#     name_or_path: "stabilityai/stable-diffusion-xl-base-1.0"
+#     # type / revision / variant / local_files_only — same meanings as above
+#   sample:
+#     prompt_file: "data/prompts.json"   # REQUIRED — JSON id/pos/neg/seed
+#     num_prompts: 32                    # optional subsample; null = all
+#     sampling_seed: 42                  # which prompts to pick (not image seed)
+#     resolution: 1024
+#     guidance_scale: 7
+#     steps: 20                          # alias: sample_steps
+#     scheduler: null                    # same enum as train sample
+#     lora_weights: null                 # folder or .safetensors; null = base only
+#     compare_base: true                 # also render base when LoRA is set
+#
+# Image RNG seed always comes from each prompt row's "seed" field.
+# =============================================================================

@@ -298,9 +298,7 @@ class AnchoredAdamWScheduleFree(Optimizer):
                 # anchor captures the initialization we want to stay near.
                 if "z" not in state:
                     state["z"] = torch.clone(p, memory_format=torch.preserve_format)
-                    state["exp_avg_sq"] = torch.zeros_like(
-                        p, memory_format=torch.preserve_format
-                    )
+                    state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
                     state["anchor"] = p.detach().clone()
 
                 y = p  # Notation to match the schedule-free theory.

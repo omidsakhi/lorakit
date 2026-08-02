@@ -42,7 +42,7 @@ config:
     loss_decay: 0.995 # EMA factor for the displayed loss
     #skip_pre_train_sample: true # skip the sample generated before training starts
     #disable_sampling: true # disable sample generation entirely
-    optimizer: "adamw" # adamw | adamw8bit | adamwschedulefree | prodigy
+    optimizer: "adamw" # adamw | adamw8bit | adamwschedulefree | adamwanchored | adamwanchoredschedulefree
     optimizer_params:
       lr: 0.0001
       betas: [0.9, 0.999]
